@@ -1,11 +1,12 @@
 ## Naming conventions
 ## 'sim' --> Related to Ecosim
 ## 'spa' --> Related to Ecospace
-## 'obs' --> Related to observed timeseries data, i.e., that Ecosim was fitted to. 
+## 'obs' --> Related to observed timeseries data, i.e., that Ecosim was fitted to.
 ## 'B'   --> Denotes biomass
 ## 'C'   --> Denotes catch
 
-## Test push/pull from new computer
+## NOTE: relative paths below assume the working directory is the repo root.
+## Opening ChesICAT-outputs.Rproj in RStudio sets this automatically.
 
 ## Setup -----------------------------------------------------------------------
 rm(list=ls())
@@ -13,42 +14,20 @@ source("./functions.R") ## Pull in functions
 library(dplyr)
 
 ## Input set up ----------------------------------------------------------------
-ewe_out_fold = "Model-outputs"
+ewe_out_fold = "ewe-outputs/model-setups"
 sim_scenario = "ecosim_sim_01.3_SM2-fit"
-obs_TS_name  = ""
+obs_TS_name  = "ewe-outputs/timeseries/ts_v1.4.csv"
 srt_year     = 2001
 
-## Set up inputs ---------------------------------------------------------------
-## A group of Ecospace simulations to compare are termed an "Experiment"
-
-experiment_choice <- 1  # Set to 1 for Experiment 1, or 2 for Experiment 2
-
-if (experiment_choice == 1) {
-  ## Experiment 1 --------------------------------------------------------------
-  ## Compares scenarios with piece-wise environmental drivers
-  spa_scenarios  = c("sp01_base", "sp02_+SIW", 
-                     "sp04_+SIW+ecoengineer", "sp05_+SIW+ee+fish-rock-SIW",
-                     "sp06_+SIW+ee+fish-SIW")
-  spa_scen_names = c("01 Base",    "02 +SIW",   
-                     "03 +EcoEng", "04 +fish rock & SIW",
-                     "05 +fish SIW only")
-  out_file_notes = "test-STEdrivers"  ## label outputs
-  
-  dir_out <- "./Compare-outputs/"  ## Folder where outputs will be stored
-  col_spa <- c("darkgoldenrod", "indianred2", "steelblue4", "darkorchid4", "green")
-  
-  
-} else if (experiment_choice == 2) {
-  ## Experiment 2 --------------------------------------------------------------
-  ## 
-  #  spa_scenarios  = c("spa_00", "spa_01", 
-  #                     "spa_02_MOM6-ISIMIP3a", "spa_03_MOM6-ISIMIP3a_PP-phyc-vint")
-  #  spa_scen_names = c("01 No PP",     "02 MODIS ChlA", 
-  #                     "03 MOM6 ChlA", "04 MOM6 Vint Phy")
-  #  out_file_notes = "comp-PPdrivers"
-  #  dir_out <- "./Scenario_comps/Compare_ppDrivers/"  ## Folder where outputs will be stored
-  #  col_spa <- c("goldenrod", "darkorchid3", "deeppink", "blue")
-}
+## Auto-detect Ecospace scenarios --------------------------------------------
+## Any subfolder under ewe_out_fold whose name starts with "spa_" is treated
+## as an Ecospace scenario to be compared.
+spa_scenarios  = list.dirs(ewe_out_fold, recursive = FALSE, full.names = FALSE)
+spa_scenarios  = spa_scenarios[grepl("^spa_", spa_scenarios)]
+spa_scen_names = spa_scenarios  ## override manually if prettier labels are wanted
+out_file_notes = "auto-detected"
+dir_out        = "./Compare-outputs/"
+col_spa        = hcl.colors(max(length(spa_scenarios), 1), palette = "Dark 3")
 
 ## Check if the files for the scenarios exist
 for (i in 1:length(spa_scenarios)) {
@@ -106,6 +85,23 @@ ym_series <- format(date_series, "%Y-%m")
 simB_xM <- read.csv(paste0(dir_sim, "biomass_monthly.csv"), skip = num_skip_sim); simB_xM$timestep.group = NULL
 simC_xM <- read.csv(paste0(dir_sim, "catch_monthly.csv"), skip = num_skip_sim); simC_xM$timestep.group = NULL
 rownames(simB_xM) = ym_series
+
+## -----------------------------------------------------------------------------
+##
+## Read-in observed fitted timeseries ------------------------------------------
+obs_ls    = f.read_ecosim_timeseries(obs_TS_name, num_row_header = 5)
+obsB.head = obs_ls$obsB.head; obsB = obs_ls$obsB
+obsC.head = obs_ls$obsC.head; obsC = obs_ls$obsC
+obs_years = as.numeric(rownames(obsB))
+obs_dates = as.Date(paste0(obs_years, "-01-01"))
+
+## Read-in functional-group lookup (pool code -> group name) ------------------
+## basic_estimates.csv has several metadata lines above the GroupNo header;
+## locate the header dynamically rather than hardcoding the skip count.
+fnm_be    = paste0(ewe_out_fold, "/basic_estimates.csv")
+be_lines  = readLines(fnm_be)
+skip_be   = which(grepl("^GroupNo,", be_lines))[1] - 1
+fg_lookup = read.csv(fnm_be, skip = skip_be)
 
 ## -----------------------------------------------------------------------------
 ##
@@ -200,11 +196,10 @@ par(mfrow=set.mfrow, mar=c(1, 2, 1, 2))
 plots_per_pg = set.mfrow[1] * set.mfrow[2]
 
 for(i in 1:num_fg){
-  #for(i in 1:19){
   grp  = fg_df$group_name[i]
-  simB = simB_xY[,i] 
+  simB = simB_xY[,i]
   spaB_ls <- lapply(ls_spaB_xY, function(df) df[, i]) ## Extract the i column from each data frame in the list
-  
+
   ## Scale to the average of a given timeframe
   simB_scaled = simB / mean(simB[1:init_years_toscale], na.rm = TRUE)
   spaB_scaled_ls = list()
@@ -213,59 +208,68 @@ for(i in 1:num_fg){
     spaB_scaled        <- spaB / mean(spaB[1:init_years_toscale], na.rm = TRUE)
     spaB_scaled_ls[[j]] <- spaB_scaled
   }
-  
-  ##-------------------------------------------------------------------------------  
-  ## PLOT 
-  
+
+  ## Observed series matching this pool code (may be zero, one, or several) ----
+  obs_cols   = which(as.numeric(obsB.head[["Pool_code"]]) == i)
+  obs_scaled_ls = list()
+  for(m in obs_cols){
+    obs_series = as.numeric(obsB[, m])
+    denom      = mean(obs_series[1:init_years_toscale], na.rm = TRUE)
+    if(is.finite(denom) && denom > 0){
+      obs_scaled_ls[[length(obs_scaled_ls) + 1]] = obs_series / denom
+    }
+  }
+
+  ##-----------------------------------------------------------------------------
+  ## PLOT
+
   ## Legend plots -------------------------------------------
   if(i %in% seq(1, num_fg, by = plots_per_pg-1)) {
-    plot(0, 0, type='n', xlim=c(0,1), ylim=c(0,1), xaxt='n', yaxt='n', 
-         xlab='', ylab='', bty='n') # Create an empty plot
+    plot(0, 0, type='n', xlim=c(0,1), ylim=c(0,1), xaxt='n', yaxt='n',
+         xlab='', ylab='', bty='n')
     legend(leg_pos, inset = 0.1, bg="gray90", box.lty = 0,
-           legend=c('Ecosim', spa_scen_names),
-           lty = c(NA, sim_lty, rep(spa_lty, length(spaB_scaled_ls))), 
-           lwd = c(NA, sim_lwd+1, rep(spa_lwd+1, length(spaB_scaled_ls))),
-           pch=c(obs_pch, NA, rep(NA, length(spaB_scaled_ls))), 
-           col =c(col_sim, col_spa), 
-           cex = leg_cex)
+           legend = c('Observed', 'Ecosim', spa_scen_names),
+           lty    = c(NA, sim_lty, rep(spa_lty, length(spaB_scaled_ls))),
+           lwd    = c(NA, sim_lwd+1, rep(spa_lwd+1, length(spaB_scaled_ls))),
+           pch    = c(obs_pch, NA, rep(NA, length(spaB_scaled_ls))),
+           col    = c('black', col_sim, col_spa),
+           cex    = leg_cex)
   }
-  
+
   ## Data plots -------------------------------------------
   ## Determine y-axis range and initialize plot
-  min = min(simB_scaled, simB_scaled, unlist(spaB_scaled_ls), na.rm=T) * 0.9
-  max = max(simB_scaled, simB_scaled, unlist(spaB_scaled_ls), na.rm=T) * 1.1
-  plot(x, rep("", length(x)), type='b', 
+  min = min(simB_scaled, unlist(spaB_scaled_ls), unlist(obs_scaled_ls), na.rm=T) * 0.9
+  max = max(simB_scaled, unlist(spaB_scaled_ls), unlist(obs_scaled_ls), na.rm=T) * 1.1
+  plot(x, rep("", length(x)), type='b',
        ylim = c(min, max), xaxt = 'n', yaxt = 'n',
        xlab = '', ylab='', bty = 'n')
-  title(main = grp, line=-.6, cex.main = main_cex) ## Add title
-  
+  title(main = grp, line=-.6, cex.main = main_cex)
+
   ## Get years from date series
   posx = as.POSIXlt(date_series)
   x_years = unique(posx$year + 1900)
   end_y = max(x_years)
   start_y = min(x_years)
-  
+
   ## Setup X-axis
   year_series <- seq(as.Date(paste0(start_y, "-01-01")), as.Date(paste0(end_y,   "-12-01")), by = "1 year")
-  num_breaks_x <- round((end_y - start_y) / x_break) ## Determine x-axis breaks
+  num_breaks_x <- round((end_y - start_y) / x_break)
   x_ticks <- pretty(x, n = num_breaks_x)
   xlab = paste0("'", substring(format(x_ticks, "%Y"), nchar(format(x_ticks, "%Y")) - 1))
   axis(1, at = x_ticks, labels = xlab, cex.axis = x_cex, las = x_las)
-  
+
   ## Setup Y-axis
   y_ticks = pretty(seq(min, max, by = (max-min)/10), n = y_break)
   axis(2, at = y_ticks, labels = y_ticks, las = 1, cex.axis = y_cex)
   abline(h=1, col='lightgray')
-  
-  ## Plot outputs: Ecosim (green line), Ecospace (blue line), Observed (black dots)
-  #if(length(obsB_scaled)>0) points(year_series, obsB_scaled, pch=16, cex=obs_cex, col = col_obs) ## Plot observed data, if it's present
-  lines(x, simB_scaled, lty=sim_lty, lwd = sim_lwd,  col = col_sim) ## Plot Ecosim
-  if(is.list(spaB_scaled_ls)) {     ## If it's a list, loop through each element and plot
-    for(j in seq_along(spaB_scaled_ls)) {
-      lines(x, spaB_scaled_ls[[j]], lty=spa_lty, lwd=spa_lwd, col=col_spa[j]) # Plot each Ecospace projection. Use the j-th color in the palette for each line.
-    }
-    #} else if(is.list(spaB_scaled_ls)==FALSE) { # If it's not a list, but a vector, plot directly
-    #  lines(x, spaB_scaled, lty=1, lwd=spa_lwd, col=col_spa[1]) # Plot Ecospace
+
+  ## Plot outputs: Ecosim (green line), Ecospace (colored lines), Observed (black dots)
+  lines(x, simB_scaled, lty=sim_lty, lwd = sim_lwd, col = col_sim)
+  for(j in seq_along(spaB_scaled_ls)) {
+    lines(x, spaB_scaled_ls[[j]], lty=spa_lty, lwd=spa_lwd, col=col_spa[j])
+  }
+  for(obs_scaled in obs_scaled_ls) {
+    points(obs_dates, obs_scaled, pch = obs_pch, cex = obs_cex, col = 'black')
   }
 }
-dev.off()    
+dev.off()
