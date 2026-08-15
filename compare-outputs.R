@@ -9,7 +9,7 @@
 ## Opening ChesICAT-outputs.Rproj in RStudio sets this automatically.
 
 ## Setup -----------------------------------------------------------------------
-rm(list=ls())
+#rm(list=ls())
 source("./functions.R") ## Pull in functions
 library(dplyr)
 
@@ -26,7 +26,6 @@ spa_scenarios  = list.dirs(ewe_out_fold, recursive = FALSE, full.names = FALSE)
 spa_scenarios  = spa_scenarios[grepl("^spa_", spa_scenarios)]
 spa_scen_names = spa_scenarios  ## override manually if prettier labels are wanted
 out_file_notes = "auto-detected"
-dir_out        = "./Compare-outputs/"
 col_spa        = hcl.colors(max(length(spa_scenarios), 1), palette = "Dark 3")
 
 ## Check if the files for the scenarios exist
@@ -36,6 +35,11 @@ for (i in 1:length(spa_scenarios)) {
   else message("Directory does NOT exist: ", dir_spa)
 }
 
+
+## Output set up ----------------------------------------------------------------
+dir_out        = "./scenario-comparisons/"
+plot_name_xY = paste0("BxY_scaled.PDF")
+
 ## Create the output folder if it doesn't exist
 if (!dir.exists(dir_out)) {
   dir.create(dir_out, recursive = TRUE)  ## Create the folder if it doesn't exist
@@ -44,15 +48,14 @@ if (!dir.exists(dir_out)) {
 ## User-defined parameters for plotting-----------------------------------------
 num_plot_pages = 1 ## Sets number of pages for PDF file
 init_years_toscale = 1 ## In plotting, this sets the "1 line" to the average of this number of years
-plot_name_xY = paste0("BxY_scaled_", init_years_toscale, "y-", out_file_notes, ".PDF")
+
 
 ## Plot output names
 dir_pdf_out  = paste0(dir_out)  ## Folder for plots
 dir_tab_out  = paste0(dir_out) ## Folder for tables with fit metrics
 if (!dir.exists(dir_pdf_out)) dir.create(dir_pdf_out, recursive = TRUE) ## Create the folder if it doesn't exist
 if (!dir.exists(dir_tab_out)) dir.create(dir_tab_out, recursive = TRUE) ## Create the folder if it doesn't exist
-folder_name <- paste0(dir_tab_out, "Scaled_", init_years_toscale, "y") ## Folder name based on `init_years_toscale`
-pdf_file_name_xY = paste0(dir_pdf_out, plot_name_xY)
+pdf_file_name_xY = paste0(dir_pdf_out, plot_name_xY); pdf_file_name_xY
 
 
 
@@ -109,16 +112,26 @@ fg_lookup = read.csv(fnm_be, skip = skip_be)
 
 ## Initialize empty lists (4) for biomasses and catches by year and month
 ls_spaB_xY <- list(); ls_spaC_xY <- list()
+kept_scenarios <- character()  ## scenarios whose run length matches Ecosim
 
 ## Loop through scenarios to populate lists
 for (i in 1:length(spa_scenarios)) {
   (dir_spa = paste0("./", ewe_out_fold, "/", spa_scenarios[i], "/"))
-  
+
   ## Read in Annual Biomass
   filename <- paste0("Ecospace_Annual_Average_Biomass.csv")    ## Set filename
-  filepath <- paste0(dir_spa, filename)                        ## Set filepath based on directory 
+  filepath <- paste0(dir_spa, filename)                        ## Set filepath based on directory
   num_skip_spa <- f.find_start_line(filepath, flag = "Year")   ## Apply function to find the start line to start reading table
   spaB_xY <- read.csv(filepath, skip = num_skip_spa, header = TRUE); spaB_xY$Year = NULL
+
+  ## Skip scenarios whose annual run length doesn't match Ecosim.
+  ## Aligning heterogeneous run lengths would require a per-scenario time axis
+  ## (out of scope here); flag it loudly so the user can revisit.
+  if (nrow(spaB_xY) != length(years)) {
+    message("Skipping ", spa_scenarios[i], ": ", nrow(spaB_xY),
+            " Ecospace years but Ecosim has ", length(years), ".")
+    next
+  }
   
   ## Read in Monthly Biomass
   filename <- paste0("Ecospace_Average_Biomass.csv")
@@ -152,9 +165,20 @@ for (i in 1:length(spa_scenarios)) {
   rownames(spaB_xM) = rownames(spaC_xM) = ym_series
   colnames(spaB_xM) = colnames(simB_xY) = fg_df$group_name
   
-  ## Add to list
-  ls_spaB_xY[[i]] <- spaB_xY
-  #  ls_spaC_xY[[i]] <- spaC_xY
+  ## Add to lists (append so skipped scenarios don't leave NULL slots)
+  slot <- length(kept_scenarios) + 1
+  ls_spaB_xY[[slot]] <- spaB_xY
+  ls_spaC_xY[[slot]] <- spaC_xY
+  kept_scenarios     <- c(kept_scenarios, spa_scenarios[i])
+}
+
+## Compact scenario metadata to just the kept ones so downstream plotting
+## (line counts, colors, legend labels) stays consistent.
+if (length(kept_scenarios) < length(spa_scenarios)) {
+  keep_mask      <- spa_scenarios %in% kept_scenarios
+  spa_scen_names <- spa_scen_names[keep_mask]
+  col_spa        <- col_spa[keep_mask]
+  spa_scenarios  <- kept_scenarios
 }
 
 
@@ -162,6 +186,8 @@ for (i in 1:length(spa_scenarios)) {
 ##
 ## Plot biomasses
 ## Note: Make sure PDF readers are closed before running pdf()
+
+pdf(pdf_file_name_xY, onefile = TRUE)
 
 ## Setup for plots -----------------------------------------------------------
 
@@ -183,9 +209,6 @@ plots_per_pg = 9
 ## -----------------------------------------------------------------------------
 ##
 ## Plot by Year (xY)
-
-pdf_file_name_xY = "Scenario-comp.pdf"
-pdf(pdf_file_name_xY, onefile = TRUE)
 
 print(paste("Writing", pdf_file_name_xY))
 x = year_series
@@ -269,6 +292,89 @@ for(i in 1:num_fg){
     lines(x, spaB_scaled_ls[[j]], lty=spa_lty, lwd=spa_lwd, col=col_spa[j])
   }
   for(obs_scaled in obs_scaled_ls) {
+    points(obs_dates, obs_scaled, pch = obs_pch, cex = obs_cex, col = 'black')
+  }
+}
+dev.off()
+
+## -----------------------------------------------------------------------------
+##
+## Plot catches (fished groups only) ------------------------------------------
+## Restricts panels to functional groups with any Ecosim catch across the
+## simulated period; other groups would produce flat-zero panels.
+
+fished_idx <- which(colSums(simC_xY, na.rm = TRUE) > 0)
+num_fg_C   <- length(fished_idx)
+
+set.mfrow    = f.get_plot_dims(x = num_fg_C / num_plot_pages, round2 = 4)
+plots_per_pg = set.mfrow[1] * set.mfrow[2]
+legend_step  = max(plots_per_pg - 1, 1)  ## avoid seq(..., by = 0) at small N
+
+pdf_file_name_catches = paste0(dir_pdf_out, "CxY_scaled.PDF")
+pdf(pdf_file_name_catches, onefile = TRUE)
+print(paste("Writing", pdf_file_name_catches))
+par(mfrow = set.mfrow, mar = c(1, 2, 1, 2))
+
+f.scale_or_raw <- function(v){
+  denom = mean(v[1:init_years_toscale], na.rm = TRUE)
+  if(is.finite(denom) && denom > 0) v / denom else v  ## fall back to raw if init is zero/NA
+}
+
+for(k in seq_along(fished_idx)){
+  i    = fished_idx[k]
+  grp  = fg_df$group_name[i]
+  simC = simC_xY[, i]
+  spaC_ls <- lapply(ls_spaC_xY, function(df) df[, i])
+
+  simC_scaled    = f.scale_or_raw(simC)
+  spaC_scaled_ls = lapply(spaC_ls, f.scale_or_raw)
+
+  ## Observed catch series for this pool code (may be zero, one, or several)
+  obs_cols   = which(as.numeric(obsC.head[["Pool_code"]]) == i)
+  obs_scaled_ls = list()
+  for(m in obs_cols){
+    obs_series = as.numeric(obsC[, m])
+    denom      = mean(obs_series[1:init_years_toscale], na.rm = TRUE)
+    if(is.finite(denom) && denom > 0){
+      obs_scaled_ls[[length(obs_scaled_ls) + 1]] = obs_series / denom
+    }
+  }
+
+  ## Legend page (once per page)
+  if(k %in% seq(1, num_fg_C, by = legend_step)){
+    plot(0, 0, type = 'n', xlim = c(0, 1), ylim = c(0, 1),
+         xaxt = 'n', yaxt = 'n', xlab = '', ylab = '', bty = 'n')
+    legend(leg_pos, inset = 0.1, bg = "gray90", box.lty = 0,
+           legend = c('Observed', 'Ecosim', spa_scen_names),
+           lty    = c(NA, sim_lty, rep(spa_lty, length(spaC_scaled_ls))),
+           lwd    = c(NA, sim_lwd + 1, rep(spa_lwd + 1, length(spaC_scaled_ls))),
+           pch    = c(obs_pch, NA, rep(NA, length(spaC_scaled_ls))),
+           col    = c('black', col_sim, col_spa),
+           cex    = leg_cex)
+  }
+
+  ## Data panel
+  min = min(simC_scaled, unlist(spaC_scaled_ls), unlist(obs_scaled_ls), na.rm = TRUE) * 0.9
+  max = max(simC_scaled, unlist(spaC_scaled_ls), unlist(obs_scaled_ls), na.rm = TRUE) * 1.1
+  plot(x, rep("", length(x)), type = 'b',
+       ylim = c(min, max), xaxt = 'n', yaxt = 'n',
+       xlab = '', ylab = '', bty = 'n')
+  title(main = grp, line = -.6, cex.main = main_cex)
+
+  x_ticks = pretty(x, n = round((end_y - start_y) / x_break))
+  axis(1, at = x_ticks,
+       labels   = paste0("'", substring(format(x_ticks, "%Y"),
+                                        nchar(format(x_ticks, "%Y")) - 1)),
+       cex.axis = x_cex, las = x_las)
+  y_ticks = pretty(seq(min, max, by = (max - min) / 10), n = y_break)
+  axis(2, at = y_ticks, labels = y_ticks, las = 1, cex.axis = y_cex)
+  abline(h = 1, col = 'lightgray')
+
+  lines(x, simC_scaled, lty = sim_lty, lwd = sim_lwd, col = col_sim)
+  for(j in seq_along(spaC_scaled_ls)){
+    lines(x, spaC_scaled_ls[[j]], lty = spa_lty, lwd = spa_lwd, col = col_spa[j])
+  }
+  for(obs_scaled in obs_scaled_ls){
     points(obs_dates, obs_scaled, pch = obs_pch, cex = obs_cex, col = 'black')
   }
 }
