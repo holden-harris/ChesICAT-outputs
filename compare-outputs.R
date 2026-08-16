@@ -14,6 +14,7 @@ source("./functions.R") ## Pull in functions
 library(dplyr)
 
 ## Input set up ----------------------------------------------------------------
+##
 ewe_out_fold = "ewe-outputs/model-setups"
 sim_scenario = "ecosim_sim_01.3_SM2-fit"
 obs_TS_name  = "ewe-outputs/timeseries/ts_v1.4.csv"
@@ -36,26 +37,35 @@ for (i in 1:length(spa_scenarios)) {
 }
 
 
-## Output set up ----------------------------------------------------------------
-dir_out        = "./scenario-comparisons/"
-plot_name_xY = paste0("BxY_scaled.PDF")
+## Output set up --------------------------------------------------------------
+##
+## Directory, filenames, and whether the biomass + catch PDFs are combined.
+## Edit any of these to change where/what/how the PDFs are written; the plotting
+## blocks below reference these variables and nothing else.
 
-## Create the output folder if it doesn't exist
-if (!dir.exists(dir_out)) {
-  dir.create(dir_out, recursive = TRUE)  ## Create the folder if it doesn't exist
-}
+dir_out            = "./scenario-comparisons/"          ## Folder where output PDFs are written
+append_pdfs        = TRUE                              ## TRUE = one combined PDF; FALSE = two separate PDFs
 
-## User-defined parameters for plotting-----------------------------------------
-num_plot_pages = 1 ## Sets number of pages for PDF file
+plot_name_xY       = "BxY_scaled.PDF"                   ## Biomass-by-year filename (used when append_pdfs = FALSE)
+plot_name_catches  = "CxY_by_fleet-group_scaled.PDF"    ## Catches-by-fleet|group filename (used when append_pdfs = FALSE)
+plot_name_combined = "ecospace_out_xY.PDF"           ## Combined filename (used when append_pdfs = TRUE)
+
+if (!dir.exists(dir_out)) dir.create(dir_out, recursive = TRUE)
+pdf_file_name_xY      = paste0(dir_out, plot_name_xY)
+pdf_file_name_catches = paste0(dir_out, plot_name_catches)
+pdf_file_combined     = paste0(dir_out, plot_name_combined)
+
+## User-defined parameters for plotting ---------------------------------------
 init_years_toscale = 1 ## In plotting, this sets the "1 line" to the average of this number of years
 
-
-## Plot output names
-dir_pdf_out  = paste0(dir_out)  ## Folder for plots
-dir_tab_out  = paste0(dir_out) ## Folder for tables with fit metrics
-if (!dir.exists(dir_pdf_out)) dir.create(dir_pdf_out, recursive = TRUE) ## Create the folder if it doesn't exist
-if (!dir.exists(dir_tab_out)) dir.create(dir_tab_out, recursive = TRUE) ## Create the folder if it doesn't exist
-pdf_file_name_xY = paste0(dir_pdf_out, plot_name_xY); pdf_file_name_xY
+## Page layout: fixed 4 columns x up to 8 rows on 8.5x11 in letter portrait.
+## Each page's first slot is reserved for the legend, so 31 data panels/page;
+## additional panels spill onto further PDF pages automatically.
+pdf_ncol      = 4
+pdf_nrow      = 8
+pdf_width_in  = 8.5
+pdf_height_in = 11
+plots_per_pg  = pdf_ncol * pdf_nrow
 
 
 
@@ -186,39 +196,30 @@ if (length(kept_scenarios) < length(spa_scenarios)) {
 
 ## -----------------------------------------------------------------------------
 ##
-## Plot biomasses
+## Plotting parameters (shared by biomass and catch blocks)
 ## Note: Make sure PDF readers are closed before running pdf()
 
-pdf(pdf_file_name_xY, onefile = TRUE)
-
-## Setup for plots -----------------------------------------------------------
-
-## Plotting parameters
 col_sim = rgb(0.2, 0.7, .1, alpha = 0.6) ## rgb (red, green, blue, alpha)
-#col_spa <- adjustcolor(col_spa, alpha.f = 1) ## Adjust transparancy
 
-num_plot_pages = 1; x_break = 5; y_break = 4; x_cex = 0.9; y_cex = 0.9; x_las = 2;
+x_break = 5; y_break = 4; x_cex = 0.9; y_cex = 0.9; x_las = 2
 sim_lty = 1; spa_lty = 1
-sim_lwd = 2; spa_lwd = 1; obs_pch = 16; obs_cex = 0.8;
-main_cex = 0.85; leg_cex = 0.9; leg_pos = 'topleft';leg_inset = 0.1
-#simB_scaled = spaB_scaled_ls
+sim_lwd = 2; spa_lwd = 1; obs_pch = 16; obs_cex = 0.8
+main_cex = 0.85; leg_cex = 0.7; leg_pos = 'topleft'; leg_inset = 0.1
 
-## Set number of plots per page
-set.mfrow = f.get_plot_dims(x=num_fg / num_plot_pages, round2=4)
-par(mfrow=set.mfrow, mar=c(1, 2, 1, 2))
-plots_per_pg = 9
+x = year_series
 
 ## -----------------------------------------------------------------------------
 ##
-## Plot by Year (xY)
+## Plot biomasses by year (xY) ------------------------------------------------
 
-print(paste("Writing", pdf_file_name_xY))
-x = year_series
-
-## Set number of plots per page
-set.mfrow = f.get_plot_dims(x=num_fg / num_plot_pages, round2=4)
-par(mfrow=set.mfrow, mar=c(1, 2, 1, 2))
-plots_per_pg = set.mfrow[1] * set.mfrow[2]
+if (append_pdfs) {
+  pdf(pdf_file_combined, width = pdf_width_in, height = pdf_height_in, onefile = TRUE)
+  print(paste("Writing", pdf_file_combined))
+} else {
+  pdf(pdf_file_name_xY, width = pdf_width_in, height = pdf_height_in, onefile = TRUE)
+  print(paste("Writing", pdf_file_name_xY))
+}
+par(mfrow = c(pdf_nrow, pdf_ncol), mar = c(1, 2, 1, 2))
 
 for(i in 1:num_fg){
   grp  = fg_df$group_name[i]
@@ -297,7 +298,7 @@ for(i in 1:num_fg){
     points(obs_dates, obs_scaled, pch = obs_pch, cex = obs_cex, col = 'black')
   }
 }
-dev.off()
+if (!append_pdfs) dev.off()
 
 ## -----------------------------------------------------------------------------
 ##
@@ -348,14 +349,20 @@ obsC_group <- as.numeric(obsC.head[["Pool_code_2"]])
 active_cols <- which(sapply(sim_fg_by_col, sum, na.rm = TRUE) > 0)
 num_panels  <- length(active_cols)
 
-set.mfrow    = f.get_plot_dims(x = num_panels / num_plot_pages, round2 = 4)
-plots_per_pg = set.mfrow[1] * set.mfrow[2]
-legend_step  = max(plots_per_pg - 1, 1)
+legend_step <- max(plots_per_pg - 1, 1)
 
-pdf_file_name_catches = paste0(dir_pdf_out, "CxY_by_fleet-group_scaled.PDF")
-pdf(pdf_file_name_catches, onefile = TRUE)
-print(paste("Writing", pdf_file_name_catches))
-par(mfrow = set.mfrow, mar = c(1, 2, 1, 2))
+if (!append_pdfs) {
+  pdf(pdf_file_name_catches, width = pdf_width_in, height = pdf_height_in, onefile = TRUE)
+  print(paste("Writing", pdf_file_name_catches))
+  par(mfrow = c(pdf_nrow, pdf_ncol), mar = c(1, 2, 1, 2))
+} else {
+  ## Append mode: force a fresh page so the catch block starts with a legend
+  ## at slot (1,1). Fill remaining slots on the current (biomass) page with
+  ## blank frames so par(mfrow) rolls to a new page.
+  biomass_slots <- num_fg + ceiling(num_fg / (plots_per_pg - 1))
+  remainder     <- ((biomass_slots - 1) %% plots_per_pg) + 1
+  for (i in seq_len(plots_per_pg - remainder)) plot.new()
+}
 
 for(k in seq_along(active_cols)){
   col_idx <- active_cols[k]
