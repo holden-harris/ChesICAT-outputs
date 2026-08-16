@@ -139,11 +139,13 @@ for (i in 1:length(spa_scenarios)) {
   num_skip_spa <- f.find_start_line(filepath, flag = "TimeStep")
   spaB_xM <- read.csv(filepath, skip = num_skip_spa, header = TRUE); spaB_xM$TimeStep = NULL
   
-  ## Read in Annual Catches
-  filename <- paste0("Ecospace_Annual_Average_Catch.csv")        ## Set filename
-  filepath <- paste0(dir_spa, filename)                          ## Set filepath based on directory 
-  num_skip_spa <- f.find_start_line(filepath, flag = "Year") ## Apply function to find the start line to start reading table
-  spaC_xY <- read.csv(filepath, skip = num_skip_spa, header = TRUE); spaC_xY$Year = NULL
+  ## Read in Annual Catches. check.names = FALSE preserves the "fleet|group"
+  ## column-name delimiter (default sanitization would turn '|' into '.').
+  filename <- paste0("Ecospace_Annual_Average_Catch.csv")
+  filepath <- paste0(dir_spa, filename)
+  num_skip_spa <- f.find_start_line(filepath, flag = "Year")
+  spaC_xY <- read.csv(filepath, skip = num_skip_spa, header = TRUE, check.names = FALSE)
+  spaC_xY[["Year"]] <- NULL
   
   ## Read in Monthly Catches
   filename <- paste0("Ecospace_Average_Catch.csv")
@@ -299,49 +301,87 @@ dev.off()
 
 ## -----------------------------------------------------------------------------
 ##
-## Plot catches (fished groups only) ------------------------------------------
-## Restricts panels to functional groups with any Ecosim catch across the
-## simulated period; other groups would produce flat-zero panels.
+## Plot catches by FLEET | GROUP (unaggregated) -------------------------------
+## One panel per Ecospace fleet|group column. No summing across groups.
 
-fished_idx <- which(colSums(simC_xY, na.rm = TRUE) > 0)
-num_fg_C   <- length(fished_idx)
+f.scale_or_raw <- function(v){
+  denom = mean(v[1:init_years_toscale], na.rm = TRUE)
+  if(is.finite(denom) && denom > 0) v / denom else v
+}
 
-set.mfrow    = f.get_plot_dims(x = num_fg_C / num_plot_pages, round2 = 4)
+## Parse fleet and group from Ecospace catch column names ("fleet|group")
+spaC_cols       <- colnames(ls_spaC_xY[[1]])
+parts           <- do.call(rbind, strsplit(spaC_cols, "\\|"))
+fleet_of_col    <- parts[, 1]
+group_of_col    <- parts[, 2]
+fleet_names     <- unique(fleet_of_col)
+fleet_id_of_col <- match(fleet_of_col, fleet_names)
+
+## Map Ecospace group name -> Ecosim GroupNo via fg_lookup (basic_estimates.csv)
+group_id_of_col <- match(trimws(group_of_col), trimws(fg_lookup$Group))
+if(any(is.na(group_id_of_col))){
+  message("Fleet|group columns with no GroupNo match: ",
+          paste(unique(group_of_col[is.na(group_id_of_col)]), collapse = "; "))
+}
+
+## Ecosim per-(fleet, group) annual catch from long-format CSV
+fnm_efg <- paste0(dir_sim, "catch-fleet-group_annual.csv")
+efg_hdr <- which(grepl("^year,fleet,group,value", readLines(fnm_efg)))[1] - 1
+efg     <- read.csv(fnm_efg, skip = efg_hdr)
+efg_years <- sort(unique(efg$year))
+
+sim_fg_by_col <- lapply(seq_along(spaC_cols), function(k){
+  rows = efg$fleet == fleet_id_of_col[k] & efg$group == group_id_of_col[k]
+  out  = rep(0, length(efg_years))
+  if(any(rows)){
+    m = efg[rows, ]
+    out[match(m$year, efg_years)] = m$value
+  }
+  out
+})
+
+## Observed catch series: Pool_code = fleet ID, Pool_code_2 = group (pool) ID
+obsC_fleet <- as.numeric(obsC.head[["Pool_code"]])
+obsC_group <- as.numeric(obsC.head[["Pool_code_2"]])
+
+## Restrict to fleet|group panels with any Ecosim catch
+active_cols <- which(sapply(sim_fg_by_col, sum, na.rm = TRUE) > 0)
+num_panels  <- length(active_cols)
+
+set.mfrow    = f.get_plot_dims(x = num_panels / num_plot_pages, round2 = 4)
 plots_per_pg = set.mfrow[1] * set.mfrow[2]
-legend_step  = max(plots_per_pg - 1, 1)  ## avoid seq(..., by = 0) at small N
+legend_step  = max(plots_per_pg - 1, 1)
 
-pdf_file_name_catches = paste0(dir_pdf_out, "CxY_scaled.PDF")
+pdf_file_name_catches = paste0(dir_pdf_out, "CxY_by_fleet-group_scaled.PDF")
 pdf(pdf_file_name_catches, onefile = TRUE)
 print(paste("Writing", pdf_file_name_catches))
 par(mfrow = set.mfrow, mar = c(1, 2, 1, 2))
 
-f.scale_or_raw <- function(v){
-  denom = mean(v[1:init_years_toscale], na.rm = TRUE)
-  if(is.finite(denom) && denom > 0) v / denom else v  ## fall back to raw if init is zero/NA
-}
+for(k in seq_along(active_cols)){
+  col_idx <- active_cols[k]
+  fid     <- fleet_id_of_col[col_idx]
+  gid     <- group_id_of_col[col_idx]
+  panel_title <- paste0(fleet_of_col[col_idx], " | ", group_of_col[col_idx])
 
-for(k in seq_along(fished_idx)){
-  i    = fished_idx[k]
-  grp  = fg_df$group_name[i]
-  simC = simC_xY[, i]
-  spaC_ls <- lapply(ls_spaC_xY, function(df) df[, i])
+  simC    <- sim_fg_by_col[[col_idx]]
+  spaC_ls <- lapply(ls_spaC_xY, function(df) df[, col_idx])
 
   simC_scaled    = f.scale_or_raw(simC)
   spaC_scaled_ls = lapply(spaC_ls, f.scale_or_raw)
 
-  ## Observed catch series for this pool code (may be zero, one, or several)
-  obs_cols   = which(as.numeric(obsC.head[["Pool_code"]]) == i)
-  obs_scaled_ls = list()
-  for(m in obs_cols){
+  ## Observed series for this (fleet, group)
+  obs_cols      <- which(obsC_fleet == fid & obsC_group == gid)
+  obs_scaled_ls <- list()
+  for (m in obs_cols) {
     obs_series = as.numeric(obsC[, m])
     denom      = mean(obs_series[1:init_years_toscale], na.rm = TRUE)
-    if(is.finite(denom) && denom > 0){
+    if (is.finite(denom) && denom > 0) {
       obs_scaled_ls[[length(obs_scaled_ls) + 1]] = obs_series / denom
     }
   }
 
   ## Legend page (once per page)
-  if(k %in% seq(1, num_fg_C, by = legend_step)){
+  if(k %in% seq(1, num_panels, by = legend_step)){
     plot(0, 0, type = 'n', xlim = c(0, 1), ylim = c(0, 1),
          xaxt = 'n', yaxt = 'n', xlab = '', ylab = '', bty = 'n')
     legend(leg_pos, inset = 0.1, bg = "gray90", box.lty = 0,
@@ -359,7 +399,7 @@ for(k in seq_along(fished_idx)){
   plot(x, rep("", length(x)), type = 'b',
        ylim = c(min, max), xaxt = 'n', yaxt = 'n',
        xlab = '', ylab = '', bty = 'n')
-  title(main = grp, line = -.6, cex.main = main_cex)
+  title(main = panel_title, line = -.6, cex.main = main_cex * 0.75)
 
   x_ticks = pretty(x, n = round((end_y - start_y) / x_break))
   axis(1, at = x_ticks,
