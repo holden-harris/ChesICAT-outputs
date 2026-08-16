@@ -1,9 +1,9 @@
 ## Naming conventions
-## 'sim' --> Related to Ecosim
-## 'spa' --> Related to Ecospace
-## 'obs' --> Related to observed timeseries data, i.e., that Ecosim was fitted to.
-## 'B'   --> Denotes biomass
-## 'C'   --> Denotes catch
+## 'sim' -<- Related to Ecosim
+## 'spa' -<- Related to Ecospace
+## 'obs' -<- Related to observed timeseries data, i.e., that Ecosim was fitted to.
+## 'B'   -<- Denotes biomass
+## 'C'   -<- Denotes catch
 
 ## NOTE: relative paths below assume the working directory is the repo root.
 ## Opening ChesICAT-outputs.Rproj in RStudio sets this automatically.
@@ -15,27 +15,68 @@ library(dplyr)
 
 ## Input set up ----------------------------------------------------------------
 ##
-ewe_out_fold = "ewe-outputs/model-setups"
-sim_scenario = "ecosim_sim_01.3_SM2-fit"
-obs_TS_name  = "ewe-outputs/timeseries/ts_v1.4.csv"
-srt_year     = 2001
+ewe_out_fold <- "ewe-outputs/model-setups"
+sim_scenario <- "ecosim_sim_01.3_SM2-fit"
+obs_TS_name  <- "ewe-outputs/timeseries/ts_v1.4.csv"
+srt_year     <- 2001
 
 ## Auto-detect Ecospace scenarios --------------------------------------------
 ## Any subfolder under ewe_out_fold whose name starts with "spa_" is treated
-## as an Ecospace scenario to be compared.
-spa_scenarios  = list.dirs(ewe_out_fold, recursive = FALSE, full.names = FALSE)
-spa_scenarios  = spa_scenarios[grepl("^spa_", spa_scenarios)]
-spa_scen_names = spa_scenarios  ## override manually if prettier labels are wanted
-out_file_notes = "auto-detected"
-col_spa        = hcl.colors(max(length(spa_scenarios), 1), palette = "Dark 3")
+## as an Ecospace scenario. Metadata is read from each scenario's
+## Ecospace_Annual_Average_Biomass.csv header so the user can confirm each
+## run's provenance (Ecosim scenario, timeseries file, start year, run length,
+## and Ecospace map dimensions) before plotting.
+spa_scenarios <- list.dirs(ewe_out_fold, recursive <- FALSE, full.names <- FALSE)
+spa_scenarios <- spa_scenarios[grepl("^spa_", spa_scenarios)]
 
-## Check if the files for the scenarios exist
-for (i in 1:length(spa_scenarios)) {
-  dir_spa <- paste0("./", ewe_out_fold, "/", spa_scenarios[i], "/")
-  if (dir.exists(dir_spa)) print(paste0("Directory exists: ", dir_spa))
-  else message("Directory does NOT exist: ", dir_spa)
+## Read a small set of metadata fields from the CSV header block.
+f.read_scenario_meta <- function(folder){
+  fp <- file.path(folder, "Ecospace_Annual_Average_Biomass.csv")
+  if (!file.exists(fp)) {
+    return(data.frame(ecosim_scen = NA, timeseries = NA, start_year = NA,
+                      n_years = NA, map = NA, stringsAsFactors = FALSE))
+  }
+  lines <- readLines(fp)
+  get_val <- function(key){
+    m <- grep(paste0("^", key, ","), lines, value = TRUE)[1]
+    if (is.na(m)) NA_character_ else sub(paste0("^", key, ","), "", m)
+  }
+  header_row <- which(grepl("^Year,", lines))[1]
+  n_years    <- if (!is.na(header_row)) length(lines) - header_row else NA_integer_
+  data.frame(
+    ecosim_scen = get_val("EcosimScenario"),
+    timeseries  = get_val("TimeSeries"),
+    start_year  = get_val("StartYear"),
+    n_years     = n_years,
+    map         = paste0(get_val("MapRows"), "x", get_val("MapCols")),
+    stringsAsFactors = FALSE
+  )
 }
+scen_info <- cbind(
+  folder = spa_scenarios,
+  do.call(rbind, lapply(file.path(ewe_out_fold, spa_scenarios),
+                        f.read_scenario_meta))
+)
 
+cat("\nDetected Ecospace scenarios under '", ewe_out_fold, "':\n", sep = "")
+print(scen_info, row.names = FALSE)
+
+## User-editable label overrides ----------------------------------------------
+## Add entries to relabel scenarios in plot titles and legends. Any folder
+## name not listed here is used as-is. Copy folder names from the table above.
+scen_labels <- c(
+   "spa_03_BCF-inv01"    = "Initial run",
+   "spa_03_BCF-inv01-PP" = "With PP forcing"
+)
+
+spa_scen_names <- ifelse(spa_scenarios %in% names(scen_labels),
+                         unname(scen_labels[spa_scenarios]),
+                         spa_scenarios)
+col_spa        <- hcl.colors(max(length(spa_scenarios), 1), palette = "Dark 3")
+
+cat("\nPlot labels (edit scen_labels above to override):\n")
+print(data.frame(folder = spa_scenarios, plot_label = spa_scen_names),
+      row.names = FALSE)
 
 ## Output set up --------------------------------------------------------------
 ##
@@ -43,17 +84,17 @@ for (i in 1:length(spa_scenarios)) {
 ## Edit any of these to change where/what/how the PDFs are written; the plotting
 ## blocks below reference these variables and nothing else.
 
-dir_out            = "./scenario-comparisons/"          ## Folder where output PDFs are written
-append_pdfs        = TRUE                              ## TRUE = one combined PDF; FALSE = two separate PDFs
+dir_out            <- "./scenario-comparisons/model-setups/"    ## Folder where output PDFs are written
+append_pdfs        <- TRUE                              ## TRUE <- one combined PDF; FALSE <- two separate PDFs
 
-plot_name_xY       = "BxY_scaled.PDF"                   ## Biomass-by-year filename (used when append_pdfs = FALSE)
-plot_name_catches  = "CxY_by_fleet-group_scaled.PDF"    ## Catches-by-fleet|group filename (used when append_pdfs = FALSE)
-plot_name_combined = "ecospace_out_xY.PDF"           ## Combined filename (used when append_pdfs = TRUE)
+plot_name_xY       <- "BxY_scaled.PDF"                   ## Biomass-by-year filename (used when append_pdfs <- FALSE)
+plot_name_catches  <- "CxY_by_fleet-group_scaled.PDF"    ## Catches-by-fleet|group filename (used when append_pdfs <- FALSE)
+plot_name_combined <- "ecospace_out_xY.PDF"           ## Combined filename (used when append_pdfs <- TRUE)
 
 if (!dir.exists(dir_out)) dir.create(dir_out, recursive = TRUE)
-pdf_file_name_xY      = paste0(dir_out, plot_name_xY)
-pdf_file_name_catches = paste0(dir_out, plot_name_catches)
-pdf_file_combined     = paste0(dir_out, plot_name_combined)
+pdf_file_name_xY      <- paste0(dir_out, plot_name_xY)
+pdf_file_name_catches <- paste0(dir_out, plot_name_catches)
+pdf_file_combined     <- paste0(dir_out, plot_name_combined)
 
 ## User-defined parameters for plotting ---------------------------------------
 init_years_toscale = 1 ## In plotting, this sets the "1 line" to the average of this number of years
@@ -67,8 +108,9 @@ pdf_width_in  = 8.5
 pdf_height_in = 11
 plots_per_pg  = pdf_ncol * pdf_nrow
 
-
-
+################################################################################
+##
+## Read in timeseries data, Ecosim outputs, and Ecospace outputs
 
 ## -----------------------------------------------------------------------------
 ##
@@ -108,7 +150,7 @@ obsC.head = obs_ls$obsC.head; obsC = obs_ls$obsC
 obs_years = as.numeric(rownames(obsB))
 obs_dates = as.Date(paste0(obs_years, "-01-01"))
 
-## Read-in functional-group lookup (pool code -> group name) ------------------
+## Read-in functional-group lookup (pool code <- group name) ------------------
 ## basic_estimates.csv has several metadata lines above the GroupNo header;
 ## locate the header dynamically rather than hardcoding the skip count.
 fnm_be    = paste0(ewe_out_fold, "/basic_estimates.csv")
@@ -204,7 +246,7 @@ col_sim = rgb(0.2, 0.7, .1, alpha = 0.6) ## rgb (red, green, blue, alpha)
 x_break = 5; y_break = 4; x_cex = 0.9; y_cex = 0.9; x_las = 2
 sim_lty = 1; spa_lty = 1
 sim_lwd = 2; spa_lwd = 1; obs_pch = 16; obs_cex = 0.8
-main_cex = 0.85; leg_cex = 0.7; leg_pos = 'topleft'; leg_inset = 0.1
+main_cex = 1.0; leg_cex = 1.0; leg_pos = 'topleft'; leg_inset = 0.1
 
 x = year_series
 
@@ -318,7 +360,7 @@ group_of_col    <- parts[, 2]
 fleet_names     <- unique(fleet_of_col)
 fleet_id_of_col <- match(fleet_of_col, fleet_names)
 
-## Map Ecospace group name -> Ecosim GroupNo via fg_lookup (basic_estimates.csv)
+## Map Ecospace group name <- Ecosim GroupNo via fg_lookup (basic_estimates.csv)
 group_id_of_col <- match(trimws(group_of_col), trimws(fg_lookup$Group))
 if(any(is.na(group_id_of_col))){
   message("Fleet|group columns with no GroupNo match: ",
@@ -426,3 +468,4 @@ for(k in seq_along(active_cols)){
   }
 }
 dev.off()
+
