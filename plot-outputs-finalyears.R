@@ -22,11 +22,17 @@ source("./functions.R") ## Pull in functions
 library(dplyr)
 
 ## Input set up ----------------------------------------------------------------
-##
-ewe_out_fold <- "ewe-outputs/model-setups"
-sim_scenario <- "ecosim_sim_01.3_SM2-fit"
-obs_TS_name  <- "ewe-outputs/timeseries/ts_v1.4.csv"
+## Swap `scen_group` to point both the input folder (ewe-outputs/<scen_group>/)
+## and the output folder (scenario-comparisons/<scen_group>/) at a different
+## exploratory scenario set. `sim_scenario` and `obs_TS_file` are separate
+## knobs because they can't always be inferred from `scen_group` alone.
+scen_group   <- "incr-comm-harvest"
+sim_scenario <- "ecosim_sim_comm-harv_stat-quo"
+obs_TS_file  <- "ts_v1.5_statusquo2037.csv"
 srt_year     <- 2001
+
+ewe_out_fold <- file.path("ewe-outputs", scen_group)
+obs_TS_path  <- file.path("ewe-outputs", "timeseries", obs_TS_file)
 
 ## Auto-detect Ecospace scenarios --------------------------------------------
 ## Any subfolder under ewe_out_fold whose name starts with "spa_" is treated
@@ -36,6 +42,10 @@ srt_year     <- 2001
 ## and Ecospace map dimensions) before plotting.
 spa_scenarios <- list.dirs(ewe_out_fold, recursive = FALSE, full.names = FALSE)
 spa_scenarios <- spa_scenarios[grepl("^spa_", spa_scenarios)]
+if (length(spa_scenarios) == 0) {
+  stop("No Ecospace scenarios (spa_*) found under '", ewe_out_fold,
+       "'. Check scen_group.")
+}
 
 ## Read a small set of metadata fields from the CSV header block.
 f.read_scenario_meta <- function(folder){
@@ -73,8 +83,8 @@ print(scen_info, row.names = FALSE)
 ## Add entries to relabel scenarios in plot titles and legends. Any folder
 ## name not listed here is used as-is. Copy folder names from the table above.
 scen_labels <- c(
-   "spa_03_BCF-inv01"    = "Initial run",
-   "spa_03_BCF-inv01-PP" = "With PP forcing"
+  "spa_exp_status-quo" = "Status quo",
+  "spa_exp_comm-eff-50" = "+50% harvest"
 )
 
 spa_scen_names <- ifelse(spa_scenarios %in% names(scen_labels),
@@ -92,7 +102,7 @@ print(data.frame(folder = spa_scenarios, plot_label = spa_scen_names),
 ## Edit any of these to change where/what/how the PDFs are written; the plotting
 ## blocks below reference these variables and nothing else.
 
-dir_out            <- "./scenario-comparisons/model-setups/"  ## Folder where output PDFs are written
+dir_out            <- paste0("./scenario-comparisons/", scen_group, "/")  ## Folder where output PDFs are written
 append_pdfs        <- TRUE                                    ## TRUE -> one combined PDF; FALSE -> two separate PDFs
 
 plot_name_final_xY       <- "Bfinal_scaled.PDF"                    ## Final-years biomass filename (append_pdfs FALSE)
@@ -155,7 +165,7 @@ rownames(simB_xM) = ym_series
 ## -----------------------------------------------------------------------------
 ##
 ## Read-in observed fitted timeseries ------------------------------------------
-obs_ls    = f.read_ecosim_timeseries(obs_TS_name, num_row_header = 5)
+obs_ls    = f.read_ecosim_timeseries(obs_TS_path, num_row_header = 5)
 obsB.head = obs_ls$obsB.head; obsB = obs_ls$obsB
 obsC.head = obs_ls$obsC.head; obsC = obs_ls$obsC
 obs_years = as.numeric(rownames(obsB))
@@ -224,6 +234,13 @@ if (length(kept_scenarios) < length(spa_scenarios)) {
   spa_scen_names <- spa_scen_names[keep_mask]
   col_spa        <- col_spa[keep_mask]
   spa_scenarios  <- kept_scenarios
+}
+if (length(spa_scenarios) == 0) {
+  stop("No Ecospace scenarios survived the length-match filter. ",
+       "Every scenario under '", ewe_out_fold,
+       "' had a different annual run length than Ecosim (", length(years),
+       " years). Re-run Ecospace with a matching span, or point ",
+       "`sim_scenario` at an Ecosim run of the same length.")
 }
 n_scen <- length(spa_scenarios)
 
