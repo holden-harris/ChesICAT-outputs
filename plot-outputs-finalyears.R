@@ -87,6 +87,15 @@ scen_labels <- c(
   "spa_exp_comm-eff-50" = "+50% harvest"
 )
 
+## Reorder so scenarios listed in `scen_labels` appear in that order first;
+## any unlisted scenarios fall to the end. This controls the left-to-right
+## bar order inside each panel of the final-years plots.
+if (length(scen_labels) > 0) {
+  labeled_order <- names(scen_labels)[names(scen_labels) %in% spa_scenarios]
+  unlabeled     <- setdiff(spa_scenarios, labeled_order)
+  spa_scenarios <- c(labeled_order, unlabeled)
+}
+
 spa_scen_names <- ifelse(spa_scenarios %in% names(scen_labels),
                          unname(scen_labels[spa_scenarios]),
                          spa_scenarios)
@@ -117,7 +126,7 @@ pdf_file_final_combined <- paste0(dir_out, plot_name_final_combined)
 ## User-defined parameters for plotting ---------------------------------------
 init_years_toscale = 1  ## When scale_to_init, values are divided by mean of first N years (per series)
 final_n_years      = 5  ## Number of trailing years to summarize per panel
-scale_to_init      = TRUE   ## TRUE -> scaled to per-series init mean; FALSE -> raw units
+scale_to_init      = FALSE  ## FALSE -> native units (t/km2, t/km2/yr); TRUE -> divide each series by its init-year mean
 overlay_points     = TRUE   ## TRUE -> overlay the N raw annual values as jittered dots
 
 ## Page layout: fixed 4 columns x up to 8 rows on 8.5x11 in letter portrait.
@@ -344,7 +353,7 @@ f.build_entries <- function(spa_summ_ls){
 ## entries are stacked at the top-left of the legend slot so all rows share
 ## a common left edge (`inset` hugs the slot's left edge; `x.intersp`
 ## tightens spacing between swatch and label).
-f.draw_final_legend <- function(){
+f.draw_final_legend <- function(y_units = NULL){
   plot(0, 0, type = 'n', xlim = c(0, 1), ylim = c(0, 1),
        xaxt = 'n', yaxt = 'n', xlab = '', ylab = '', bty = 'n')
   scen_labels_num <- paste0(seq_len(n_scen), "  ", spa_scen_names)
@@ -358,6 +367,10 @@ f.draw_final_legend <- function(){
          y.intersp = 1.1,
          xjust     = 0,
          yjust     = 0)
+  if (!is.null(y_units)) {
+    text(x = 0.5, y = 0.15, labels = y_units,
+         cex = leg_cex * 0.9, adj = c(0.5, 0.5))
+  }
 }
 
 ## Draw one bar-and-whisker panel. `entries` is a list of
@@ -436,8 +449,11 @@ for (i in 1:num_fg) {
   summ_ls     <- lapply(spaB_use_ls, f.final_years_summary, n = final_n_years)
   entries     <- f.build_entries(summ_ls)
 
-  ## Legend at first slot of each page
-  if (i %in% seq(1, num_fg, by = plots_per_pg - 1)) f.draw_final_legend()
+  ## Legend at first slot of each page (biomass block)
+  if (i %in% seq(1, num_fg, by = plots_per_pg - 1)) {
+    f.draw_final_legend(y_units = if (scale_to_init) "Y-axis: relative to init"
+                                  else expression("Y-axis: Biomass (t/km"^2*")"))
+  }
 
   f.draw_panel(grp, entries)
 }
@@ -469,8 +485,11 @@ for (k in seq_along(active_cols)) {
   summ_ls     <- lapply(spaC_use_ls, f.final_years_summary, n = final_n_years)
   entries     <- f.build_entries(summ_ls)
 
-  ## Legend at first slot of each page
-  if (k %in% seq(1, num_catch_panels, by = plots_per_pg - 1)) f.draw_final_legend()
+  ## Legend at first slot of each page (catch block)
+  if (k %in% seq(1, num_catch_panels, by = plots_per_pg - 1)) {
+    f.draw_final_legend(y_units = if (scale_to_init) "Y-axis: relative to init"
+                                  else expression("Y-axis: Catch (t/km"^2*"/yr)"))
+  }
 
   f.draw_panel(panel_title, entries)
 }

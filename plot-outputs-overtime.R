@@ -75,8 +75,8 @@ print(scen_info, row.names = FALSE)
 ## Add entries to relabel scenarios in plot titles and legends. Any folder
 ## name not listed here is used as-is. Copy folder names from the table above.
 scen_labels <- c(
-   "spa_03_BCF-inv01" = "Status quo",
-   "spa_scenX_50incr" = "+50% harvest"
+   "spa_exp_status-quo" = "Status quo",
+   "spa_exp_comm-eff-50" = "+50% harvest"
 )
 
 spa_scen_names <- ifelse(spa_scenarios %in% names(scen_labels),
